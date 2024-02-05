@@ -9,11 +9,12 @@ from onnxruntime import InferenceSession
 
 #  ──────────────────────────────────────────────────────────────────────────
 
+
 def save_onnx(model, fname, x_train):
     """Saves sklearn model to ONNX format."""
 
     onx = to_onnx(model, x_train[:1].astype(np.float32), target_opset=12)
-    with open(fname, 'wb') as file:
+    with open(fname, "wb") as file:
         file.write(onx.SerializeToString())
 
 
@@ -28,16 +29,16 @@ def build_training_data(hourly_data_path):
     """Build training data from hourly data function. Skips NaN'd days."""
 
     hourly_data = pd.read_csv(hourly_data_path)
-    
-    print('Loaded hourly data')
+
+    print("Loaded hourly data")
 
     # integrated power consumption
 
-    dec = [] # daily energy consumption
+    dec = []  # daily energy consumption
     t_dec = []
 
-    time = hourly_data['datetime'].astype(np.datetime64).values.astype('datetime64[s]')
-    power_consumption = hourly_data['kw_total_zone2'].values
+    time = hourly_data["datetime"].astype(np.datetime64).values.astype("datetime64[s]")
+    power_consumption = hourly_data["kw_total_zone2"].values
 
     for ti, t in enumerate(time):
         tmp_t = pd.Timestamp(t)
@@ -48,18 +49,20 @@ def build_training_data(hourly_data_path):
             ind = np.where((tmp_t < time) & (time < day_end), True, False)
 
             if len(time[ind]) > 0 and not np.isnan(power_consumption[ind]).any():
-                t_dec.append(np.datetime64(tmp_t).astype('datetime64[s]'))
-                dec.append(np.trapz(power_consumption[ind], time[ind].astype(int))/3600) # integrated kW to kJ then to kWh
+                t_dec.append(np.datetime64(tmp_t).astype("datetime64[s]"))
+                dec.append(
+                    np.trapz(power_consumption[ind], time[ind].astype(int)) / 3600
+                )  # integrated kW to kJ then to kWh
 
     # time series of daily energy consumption
     t_dec = np.array(t_dec)
     dec = np.array(dec)
 
-    print('Calculated daily energy consumption')
+    print("Calculated daily energy consumption")
 
     # seperating predictors
 
-    N = 7 # N days of predictors beforehand
+    N = 7  # N days of predictors beforehand
     final_ind = []
     final_hourly = []
 
@@ -67,19 +70,25 @@ def build_training_data(hourly_data_path):
 
     for ti, t in enumerate(t_dec):
         tmp_t = pd.Timestamp(t)
-        ind = np.where((tmp_t - predictor_window <= time) & (time < tmp_t), True, False) # finding indices within the N prior days
+        ind = np.where(
+            (tmp_t - predictor_window <= time) & (time < tmp_t), True, False
+        )  # finding indices within the N prior days
 
         bad_ind = np.isnan(hourly_data.iloc[ind, 1::].values)
-        if len(time[ind]) >= 24 * N and not bad_ind.any(): # rejecting any data with NaNs; useful for the student dataset
+        if (
+            len(time[ind]) >= 24 * N and not bad_ind.any()
+        ):  # rejecting any data with NaNs; useful for the student dataset
             final_ind.append(ti)
-            final_hourly.append(hourly_data.iloc[ind, 1::].values) # dropping datetime column
+            final_hourly.append(
+                hourly_data.iloc[ind, 1::].values
+            )  # dropping datetime column
 
     # getting targets and predictors
     target_time = t_dec[final_ind]
     targets = dec[final_ind]
     predictors = np.array(final_hourly)
 
-    print('Calculated predictor window')
+    print("Calculated predictor window")
 
     return target_time, targets, predictors
 
@@ -109,4 +118,68 @@ def train_test_split(predictors, targets, test_ind=[]):
 
 def relative_squared_error(y_pred, y_true):
     """Relative squared error (RSE; also called relative mean square error). < 1 is good, = 1 is bad, > 1 really bad."""
-    return np.mean((y_pred - y_true)**2)/np.mean((y_true - y_true.mean())**2)
+    return np.mean((y_pred - y_true) ** 2) / np.mean((y_true - y_true.mean()) ** 2)
+
+
+def build_training_data_from_df(hourly_data):
+    """Build training data from hourly data function. Skips NaN'd days."""
+
+    # integrated power consumption
+
+    dec = []  # daily energy consumption
+    t_dec = []
+
+    time = hourly_data["datetime"].astype(np.datetime64).values.astype("datetime64[s]")
+    power_consumption = hourly_data["kw_total_zone2"].values
+
+    for ti, t in enumerate(time):
+        tmp_t = pd.Timestamp(t)
+
+        if np.isclose(tmp_t.hour, 0) and np.isclose(tmp_t.minute, 0):
+
+            day_end = np.datetime64(tmp_t + pd.Timedelta(days=1))
+            ind = np.where((tmp_t < time) & (time < day_end), True, False)
+
+            if len(time[ind]) > 0 and not np.isnan(power_consumption[ind]).any():
+                t_dec.append(np.datetime64(tmp_t).astype("datetime64[s]"))
+                dec.append(
+                    np.trapz(power_consumption[ind], time[ind].astype(int)) / 3600
+                )  # integrated kW to kJ then to kWh
+
+    # time series of daily energy consumption
+    t_dec = np.array(t_dec)
+    dec = np.array(dec)
+
+    print("Calculated daily energy consumption")
+
+    # seperating predictors
+
+    N = 7  # N days of predictors beforehand
+    final_ind = []
+    final_hourly = []
+
+    predictor_window = pd.Timedelta(days=N)
+
+    for ti, t in enumerate(t_dec):
+        tmp_t = pd.Timestamp(t)
+        ind = np.where(
+            (tmp_t - predictor_window <= time) & (time < tmp_t), True, False
+        )  # finding indices within the N prior days
+
+        bad_ind = np.isnan(hourly_data.iloc[ind, 1::].values)
+        if (
+            len(time[ind]) >= 24 * N and not bad_ind.any()
+        ):  # rejecting any data with NaNs; useful for the student dataset
+            final_ind.append(ti)
+            final_hourly.append(
+                hourly_data.iloc[ind, 1::].values
+            )  # dropping datetime column
+
+    # getting targets and predictors
+    target_time = t_dec[final_ind]
+    targets = dec[final_ind]
+    predictors = np.array(final_hourly)
+
+    print("Calculated predictor window")
+
+    return target_time, targets, predictors
